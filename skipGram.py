@@ -21,8 +21,7 @@ def text2sentences(path):
     sentences = []
     with open(path, encoding="utf8") as f:
         for l in f:
-            sentence = l.lower().split()
-
+            sentences.append(l.lower().split())
     return sentences
 
 
@@ -59,6 +58,7 @@ class SkipGram:
         print('Mapping ids to frequencies')
         self.id2frequency = {self.w2id[word]: self.vocab[word] ** (3/4) for word in list(self.vocab.keys())}
         self.sum_of_frequencies = sum(list(self.id2frequency.values()))
+
 
 
     def create_vocabulary(self):
@@ -189,3 +189,6 @@ if __name__ == '__main__':
             for a, b, _ in pairs:
                 # make sure this does not raise any exception, even if a or b are not in sg.vocab
                 print(sg.similarity(a, b))
+
+
+
