@@ -7,11 +7,12 @@ from itertools import chain
 
 # useful stuff
 import numpy as np
+import random
 from scipy.special import expit
 from sklearn.preprocessing import normalize
 
 
-path = 'data/training/news.en-00001-of-00100' # First data file for coding and easy debugging
+path = 'data/training/news.en-00001-of-00100'  # First data file for coding and easy debugging
 linux = False
 
 
@@ -20,7 +21,8 @@ def text2sentences(path):
     sentences = []
     with open(path, encoding="utf8") as f:
         for l in f:
-            sentences.append(l.lower().split())
+            sentence = l.lower().split()
+
     return sentences
 
 
@@ -32,20 +34,32 @@ def loadPairs(path):
 
 class SkipGram:
     def __init__(self, sentences, nEmbed=100, negativeRate=5, winSize=5, minCount=5):
-        self.minCount = minCount,
-        self.winSize = winSize,
-        self.negativeRate = negativeRate,
-        self.nEmbed = nEmbed,
+        self.loss = None
+        self.minCount = minCount,  # Minimum word frequency to enter the dictionary
+        self.winSize = winSize,  # Window size for defining context
+        self.negativeRate = negativeRate,  # Number of negative samples to provide for each context word (I assume)
+        self.nEmbed = nEmbed,  # idk what that is that thing that it is what is this
 
         print('Initializing SkipGram model')
         self.trainset = sentences
 
         print('Creating vocabulary...')
         self.vocab = self.create_vocabulary()  # list of valid words
-        print('Vocabulary of {} words created'.format(len(list(self.vocab))))
+        if len(list(self.vocab)) == 0:
+            raise ValueError('The vocabulary is empty. Please initialize vocabulary by feeding a non-empty list of '
+                             'sentences, or lower the minCount variable to take into account words with lower '
+                             'frequency.')
+
 
         print('Mapping words to ids')
         self.w2id = self.create_word_mapping()  # word to ID mapping
+
+
+        # Map word ID to word frequency (speeds up computation for negative sampling)
+        print('Mapping ids to frequencies')
+        self.id2frequency = {self.w2id[word]: self.vocab[word] ** (3/4) for word in list(self.vocab.keys())}
+        self.sum_of_frequencies = sum(list(self.id2frequency.values()))
+
 
     def create_vocabulary(self):
         # Get the preprocessed sentences as a single list
@@ -58,24 +72,38 @@ class SkipGram:
         word_counts = {word: word_counts[word] for word in word_counts
                        if word_counts[word] >= self.minCount[0]}
 
-        return list(word_counts.keys())
+        return word_counts
 
     def create_word_mapping(self):
-        if len(list(self.vocab)) == 0:
-            raise ValueError('The vocabulary is empty. Please initialize vocabulary by feeding a non-empty list of '
-                             'sentences, or lower the minCount variable to take into account words with lower '
-                             'frequency.')
         word_mapping = {}
-        for idx, word in enumerate(list(self.vocab)):
+        for idx, word in enumerate(list(self.vocab.keys())):
             word_mapping[word] = idx
         return word_mapping
 
     def sample(self, omit):
-        """samples negative words, ommitting those in set omit"""
+        # Sample words from dictionary based on weighted probability, inspired from
+        # https://stackoverflow.com/questions/40927221/how-to-choose-keys-from-a-python-dictionary-based-on-weighted-probability
 
+        sum_of_frequencies = self.sum_of_frequencies
+        for omit_id in omit:
+            try:
+                sum_of_frequencies -= self.id2frequency[omit_id]
+            except KeyError:
+                pass  # Omit word not present in vocabulary, no need to take it into account for negative sampling
 
-        #raise NotImplementedError('this is easy, might want to do some preprocessing to speed up')
+        sample_candidates = {id: freq for id, freq in self.id2frequency.items() if id not in omit}
+        negative_ids = []
 
+        for sample_number in range(self.negativeRate[0]):
+            random_word_index = random.random() * sum_of_frequencies
+            total = 0
+            for id, probability in sample_candidates.items():
+                total += probability
+                if random_word_index <= total:
+                    negative_ids.append(id)
+                    break
+
+        return negative_ids
 
     def train(self):
         for counter, sentence in enumerate(self.trainset):
@@ -85,18 +113,20 @@ class SkipGram:
                 # Get the index of the word in the vocabulary
                 wIdx = self.w2id[word]
 
-                # Initializes a random window size for defining the word context (dynamic window size described in paper)
+                # Initializes a random window size for defining the word context
+                # (dynamic window size described in paper)
                 winsize = np.random.randint(self.winSize) + 1
+
                 # Computes the indexes of window start and stop to get the context words
                 start = max(0, wpos - winsize)
                 end = min(wpos + winsize + 1, len(sentence))
 
                 for context_word in sentence[start:end]:
-                    # Get the index of the context word in the vocabulary
                     ctxtId = self.w2id[context_word]
                     if ctxtId == wIdx:
                         continue  # skip if context word is the word itself
                     negativeIds = self.sample({wIdx, ctxtId})
+
                     self.trainWord(wIdx, ctxtId, negativeIds)
                     self.trainWords += 1
 
@@ -133,8 +163,10 @@ if __name__ == '__main__':
         for i in range(5):
             print(txtToSentence_output[i])
 
-        sg_model = SkipGram(txtToSentence_output)
+        sentence = ' '.join(['haha ' * 100 + 'hihi ' * 20 + 'hoho ' * 5 + '.']).split()
+        random.shuffle(sentence)
 
+        sg_model = SkipGram([sentence], minCount=1, negativeRate=15)
 
     elif linux:
         parser = argparse.ArgumentParser()
@@ -157,6 +189,3 @@ if __name__ == '__main__':
             for a, b, _ in pairs:
                 # make sure this does not raise any exception, even if a or b are not in sg.vocab
                 print(sg.similarity(a, b))
-
-
-
