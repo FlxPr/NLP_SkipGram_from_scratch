@@ -17,15 +17,21 @@ linux = False
 
 
 def text2sentences(path):
-    # TODO: remove stop words, punctuation, etc.
+    # TODO: remove stop words ?
+    # No need to take care of rare weird words like bqb4645 which will not be in dictionary due to minimum word count
     sentences = []
-    with open(path, encoding="utf8") as f:
-        for l in f:
-            sentences.append(l.lower().split())
+    with open(path, encoding="utf8") as file:
+        for sentence in file:
+            preprocessed_sentence = sentence.lower().split()
+
+            # Gets rid of small words and punctuation (length<2) and numbers like dates that may show up frequently
+            preprocessed_sentence = list(filter(lambda x: not x.isdigit() and len(x) > 2, preprocessed_sentence))
+
+            sentences.append(preprocessed_sentence)
     return sentences
 
 
-def loadPairs(path):
+def load_pairs(path):
     data = pd.read_csv(path, delimiter='\t')
     pairs = zip(data['word1'], data['word2'], data['similarity'])
     return pairs
@@ -49,17 +55,13 @@ class SkipGram:
                              'sentences, or lower the minCount variable to take into account words with lower '
                              'frequency.')
 
-
         print('Mapping words to ids')
         self.w2id = self.create_word_mapping()  # word to ID mapping
-
 
         # Map word ID to word frequency (speeds up computation for negative sampling)
         print('Mapping ids to frequencies')
         self.id2frequency = {self.w2id[word]: self.vocab[word] ** (3/4) for word in list(self.vocab.keys())}
         self.sum_of_frequencies = sum(list(self.id2frequency.values()))
-
-
 
     def create_vocabulary(self):
         # Get the preprocessed sentences as a single list
@@ -183,12 +185,10 @@ if __name__ == '__main__':
             sg.save(opts.model)
 
         else:
-            pairs = loadPairs(opts.text)
+            pairs = load_pairs(opts.text)
 
             sg = SkipGram.load(opts.model)
             for a, b, _ in pairs:
                 # make sure this does not raise any exception, even if a or b are not in sg.vocab
                 print(sg.similarity(a, b))
-
-
 
