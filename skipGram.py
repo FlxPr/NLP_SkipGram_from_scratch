@@ -3,7 +3,8 @@ import argparse
 import pandas as pd
 from collections import Counter
 from itertools import chain
-
+import matplotlib.pyplot as plt
+import json
 
 # useful stuff
 import numpy as np
@@ -14,6 +15,13 @@ from sklearn.preprocessing import normalize
 
 path = 'data/training/news.en-00001-of-00100'  # First data file for coding and easy debugging
 linux = False
+
+
+def one_hot_encode(word_id, dimension):
+    return np.array([[0] * word_id + [1] + [0] * (dimension - (word_id + 1))])
+
+def sigmoid(x):
+     return 1/(1 + np.exp(-x))
 
 
 def text2sentences(path):
@@ -38,12 +46,15 @@ def load_pairs(path):
 
 
 class SkipGram:
-    def __init__(self, sentences, nEmbed=100, negativeRate=5, winSize=5, minCount=5):
+    def __init__(self, sentences, nEmbed=100, negativeRate=5, winSize=5, minCount=5, learning_rate=0.1):
         self.loss = None
-        self.minCount = minCount,  # Minimum word frequency to enter the dictionary
-        self.winSize = winSize,  # Window size for defining context
-        self.negativeRate = negativeRate,  # Number of negative samples to provide for each context word (I assume)
-        self.nEmbed = nEmbed,  # idk what that is that thing that it is what is this
+        self.minCount = minCount  # Minimum word frequency to enter the dictionary
+        self.winSize = winSize  # Window size for defining context
+        self.negativeRate = negativeRate  # Number of negative samples to provide for each context word
+        self.learning_rate = learning_rate
+        self.trainWords = 0
+        self.nEmbed = nEmbed
+
 
         print('Initializing SkipGram model')
         self.trainset = sentences
@@ -62,54 +73,47 @@ class SkipGram:
         print('Mapping ids to frequencies')
         self.id2frequency = {self.w2id[word]: self.vocab[word] ** (3/4) for word in list(self.vocab.keys())}
         self.sum_of_frequencies = sum(list(self.id2frequency.values()))
+        self.id_list = list(self.id2frequency.keys())
+        self.frequency_list = list(map(lambda x: x/self.sum_of_frequencies, self.id2frequency.values()))
+
+
+        print('Initializing weights')
+        self.weights_input = np.random.randn(len(self.vocab), nEmbed) * np.sqrt(2/len(self.vocab))
+        self.weights_output = np.random.randn(nEmbed, len(self.vocab)) * np.sqrt(2/nEmbed)
+
+        self.train()
+        self.plot_embedding()
 
     def create_vocabulary(self):
         # Get the preprocessed sentences as a single list
-        concatenated_list = chain.from_iterable(self.trainset)
+        concatenated_sentences = chain.from_iterable(self.trainset)
 
         # Count the word occurrences
-        word_counts = Counter(concatenated_list)
+        word_counts = Counter(concatenated_sentences)
 
         # Filter down words by occurrence
         word_counts = {word: word_counts[word] for word in word_counts
-                       if word_counts[word] >= self.minCount[0]}
+                       if word_counts[word] >= self.minCount}
 
         return word_counts
 
-    def create_word_mapping(self):
-        word_mapping = {}
-        for idx, word in enumerate(list(self.vocab.keys())):
-            word_mapping[word] = idx
-        return word_mapping
+    def create_word_mapping(self):  # Set index of word in unique words list as word id
+        return {word: idx for idx, word in enumerate(list(self.vocab.keys()))}
 
     def sample(self, omit):
-        # Sample words from dictionary based on weighted probability, inspired from
-        # https://stackoverflow.com/questions/40927221/how-to-choose-keys-from-a-python-dictionary-based-on-weighted-probability
+        samples = list(np.random.choice(self.id_list,
+                       size=self.negativeRate,
+                       p=self.frequency_list))
 
-        sum_of_frequencies = self.sum_of_frequencies
-        for omit_id in omit:
-            try:
-                sum_of_frequencies -= self.id2frequency[omit_id]
-            except KeyError:
-                pass  # Omit word not present in vocabulary, no need to take it into account for negative sampling
-
-        sample_candidates = {id: freq for id, freq in self.id2frequency.items() if id not in omit}
-        negative_ids = []
-
-        for sample_number in range(self.negativeRate[0]):
-            random_word_index = random.random() * sum_of_frequencies
-            total = 0
-            for id, probability in sample_candidates.items():
-                total += probability
-                if random_word_index <= total:
-                    negative_ids.append(id)
-                    break
-
-        return negative_ids
+        while any([omit_word in samples for omit_word in omit]):
+            samples = list(np.random.choice(self.id_list,
+                           size=self.negativeRate,
+                           p=self.frequency_list))
+        return samples
 
     def train(self):
         for counter, sentence in enumerate(self.trainset):
-            sentence = filter(lambda word: word in self.vocab, sentence)
+            sentence = list(filter(lambda word: word in self.vocab, sentence))
             for wpos, word in enumerate(sentence):
                 # For every word and position in the sentence
                 # Get the index of the word in the vocabulary
@@ -134,12 +138,33 @@ class SkipGram:
 
             if counter % 1000 == 0:
                 print(' > training %d of %d' % (counter, len(self.trainset)))
-                self.loss.append(self.accLoss / self.trainWords)
-                self.trainWords = 0
-                self.accLoss = 0.
+                #self.loss.append(self.accLoss / self.trainWords)
+                #self.trainWords = 0
+                #self.accLoss = 0.
+#
 
     def trainWord(self, wordId, contextId, negativeIds):
-        raise NotImplementedError('here is all the fun!')
+        # One hot encode words
+        word_onehot = one_hot_encode(wordId, len(self.vocab))
+
+        # Compute hidden layer
+        h = word_onehot.dot(self.weights_input)
+#
+        output_matrix_gradient_positive_example = (sigmoid(h.dot(self.weights_output[:, contextId].reshape(self.nEmbed, 1))) - 1) * h
+        input_matrix_gradient = (sigmoid(h.dot(self.weights_output[:, contextId].reshape(self.nEmbed, 1))) - 1) *\
+                                 self.weights_output[:, contextId]
+
+        output_matrix_gradient_negative_examples = []
+        for negative_id in negativeIds:
+            output_matrix_gradient_negative_examples.append(sigmoid(h.dot(self.weights_output[:, negative_id].reshape(self.nEmbed, 1))) * h)
+            input_matrix_gradient += sigmoid(h.dot(self.weights_output[:, negative_id].reshape(self.nEmbed, 1))) *\
+                                     self.weights_output[:, negative_id]
+
+        self.weights_input[wordId, :] -= self.learning_rate * input_matrix_gradient.flatten()
+        self.weights_output[:, contextId] -= self.learning_rate * output_matrix_gradient_positive_example.flatten()
+        for negative_id, gradient in zip(negativeIds, output_matrix_gradient_negative_examples):
+            self.weights_output[:, negative_id] -= self.learning_rate * gradient.flatten()
+
 
     def save(self, path):
         raise NotImplementedError('implement it!')
@@ -157,18 +182,35 @@ class SkipGram:
     def load(path):
         raise NotImplementedError('implement it!')
 
+    @staticmethod
+    def softmax(self, vec):
+        exponentials = np.array([np.exp(k) for k in vec])
+        sum_of_exponentials = np.sum(exponentials)
+        return np.array(map(lambda x: x/sum_of_exponentials, exponentials))
+
+    def plot_embedding(self):
+        if self.nEmbed != 2:
+            return
+        word_list = list(self.vocab.keys())
+        print(word_list)
+
+        word_embeddings = [one_hot_encode(self.w2id[word], len(self.vocab)).dot(self.weights_input) for word in word_list]
+        fig, ax = plt.subplots()
+        ax.scatter([word_embeddings[i][0][0] for i in range(len(word_list))], [word_embeddings[i][0][1] for i in range(len(word_list))])
+
+        for i, letter in enumerate(word_list):
+
+            ax.annotate(letter, (word_embeddings[i][0][0], word_embeddings[i][0][1]), size=20 if letter in ['felix', 'micha'] else 10)
+        plt.show()
+
 
 if __name__ == '__main__':
     if not linux:
-        print('Output of preprocessing :')
-        txtToSentence_output = text2sentences(path)
-        for i in range(5):
-            print(txtToSentence_output[i])
 
-        sentence = ' '.join(['haha ' * 100 + 'hihi ' * 20 + 'hoho ' * 5 + '.']).split()
-        random.shuffle(sentence)
+        sentences = ['a b c d e f g h i j k l m n o p q r s t u v w x y z'.split(' ')] * 100
+        sg_model = SkipGram(sentences, minCount=5, negativeRate=5, nEmbed=2, learning_rate=0.01)
 
-        sg_model = SkipGram([sentence], minCount=1, negativeRate=15)
+
 
     elif linux:
         parser = argparse.ArgumentParser()
@@ -180,6 +222,7 @@ if __name__ == '__main__':
 
         if not opts.test:
             sentences = text2sentences(opts.text)
+            random.shuffle(sentences)
             sg = SkipGram(sentences)
             sg.train()
             sg.save(opts.model)
