@@ -5,6 +5,7 @@ from collections import Counter
 from itertools import chain
 import matplotlib.pyplot as plt
 import json
+import time
 
 # useful stuff
 import numpy as np
@@ -19,6 +20,7 @@ linux = False
 
 def one_hot_encode(word_id, dimension):
     return np.array([[0] * word_id + [1] + [0] * (dimension - (word_id + 1))])
+
 
 def sigmoid(x):
      return 1/(1 + np.exp(-x))
@@ -55,7 +57,7 @@ class SkipGram:
         self.learning_rate = learning_rate
         self.trainWords = 0
         self.nEmbed = nEmbed
-        self.id2frequency = {}
+        self.id2frequency = id2frequency
         self.w2id = w2id
         self.vocab = vocab
         self.frequency_list = []
@@ -64,7 +66,7 @@ class SkipGram:
         self.input_weights = input_weights
         self.output_weights = output_weights
         self.id2frequency = id2frequency
-
+        self.cached_samples = []
 
     def create_vocabulary(self):
         # Get the preprocessed sentences as a single list
@@ -82,18 +84,36 @@ class SkipGram:
     def create_word_mapping(self):  # Set index of word in unique words list as word id
         return {word: idx for idx, word in enumerate(list(self.vocab.keys()))}
 
-    def sample(self, omit):
+    def create_negative_samples(self, size=100000):
         samples = list(np.random.choice(self.id_list,
-                                        size=self.negativeRate,
+                                        size=size,
                                         p=self.frequency_list))
+        self.cached_samples.extend(samples)
 
-        while any([omit_word in samples for omit_word in omit]):
-            samples = list(np.random.choice(self.id_list,
-                                            size=self.negativeRate,
-                                            p=self.frequency_list))
-        return samples
+
+    def sample(self, omit):
+        global time_sampling
+        global time_check_any_sampling
+
+        tic = time.time()
+        negative_samples = []
+        while len(negative_samples) < self.negativeRate:
+            if len(self.cached_samples) == 0:
+                self.create_negative_samples()
+
+            negative_sample = self.cached_samples.pop()
+            if negative_sample not in omit:
+                negative_samples.append(negative_sample)
+
+        toc = time.time()
+        time_sampling += toc - tic
+
+        return negative_samples
 
     def train(self):
+        global time_training
+        tic = time.time()
+
         print('Initializing SkipGram model')
         self.trainset = sentences
 
@@ -137,33 +157,29 @@ class SkipGram:
                     ctxtId = self.w2id[context_word]
                     if ctxtId == wIdx:
                         continue  # skip if context word is the word itself
-                    negativeIds = self.sample({wIdx, ctxtId})
 
+                    negativeIds = self.sample(omit={wIdx, ctxtId})
                     self.trainWord(wIdx, ctxtId, negativeIds)
                     self.trainWords += 1
 
-            if counter % 1 == 0:
+            if counter % 100 == 0:
                 print(' > training %d of %d' % (counter, len(self.trainset)))
-                #self.loss.append(self.accLoss / self.trainWords)
-                #self.trainWords = 0
-                #self.accLoss = 0.
-
+                print('elapsed time training {} seconds, sampling {} seconds'.format(int(time.time() - tic), time_sampling))
+                # self.loss.append(self.accLoss / self.trainWords)
+                # self.trainWords = 0
+                # self.accLoss = 0.
+        self.plot_embedding()
 
     def trainWord(self, wordId, contextId, negativeIds):
-        # One hot encode words
-        word_onehot = one_hot_encode(wordId, len(self.vocab))
-
-        # Compute hidden layer
-        h = word_onehot.dot(self.input_weights)
-        #
-        output_matrix_gradient_positive_example = (sigmoid(h.dot(self.output_weights[:, contextId].reshape(self.nEmbed, 1))) - 1) * h
-        input_matrix_gradient = (sigmoid(h.dot(self.output_weights[:, contextId].reshape(self.nEmbed, 1))) - 1) * \
+        word_embedding = self.input_weights[wordId, :]
+        input_matrix_gradient = (sigmoid(word_embedding.dot(self.output_weights[:, contextId].reshape(self.nEmbed, 1))) - 1) * \
                                 self.output_weights[:, contextId]
 
+        output_matrix_gradient_positive_example = (sigmoid(word_embedding.dot(self.output_weights[:, contextId])) - 1) * word_embedding
         output_matrix_gradient_negative_examples = []
         for negative_id in negativeIds:
-            output_matrix_gradient_negative_examples.append(sigmoid(h.dot(self.output_weights[:, negative_id].reshape(self.nEmbed, 1))) * h)
-            input_matrix_gradient += sigmoid(h.dot(self.output_weights[:, negative_id].reshape(self.nEmbed, 1))) * \
+            output_matrix_gradient_negative_examples.append(sigmoid(word_embedding.dot(self.output_weights[:, negative_id])) * word_embedding)
+            input_matrix_gradient += sigmoid(word_embedding.dot(self.output_weights[:, negative_id])) * \
                                      self.output_weights[:, negative_id]
 
         self.input_weights[wordId, :] -= self.learning_rate * input_matrix_gradient.flatten()
@@ -194,8 +210,8 @@ class SkipGram:
         """
 
         if word1 in self.vocab and word2 in self.vocab:
-            word1_embed = self.one_hot_encode(word1).dot(self.input_weights)
-            word2_embed = self.one_hot_encode(word2).dot(self.input_weights)
+            word1_embed = one_hot_encode(word1, len(self.vocab)).dot(self.input_weights)
+            word2_embed = one_hot_encode(word2, len(self.vocab)).dot(self.input_weights)
             similarity = word1_embed.dot(word2_embed.T)/(np.linalg.norm(word1_embed) * np.linalg.norm(word2_embed)).item()
             return similarity.item()
 
@@ -212,14 +228,11 @@ class SkipGram:
                         w2id=params['w2id'],
                         id2frequency=params['id2frequency'])
 
-
-    def one_hot_encode(self, word):
-        return one_hot_encode(self.w2id[word], len(self.vocab))
-
     def plot_embedding(self):
         if self.nEmbed != 2:
             return
         word_list = list(self.vocab.keys())
+        print(word_list)
 
         word_embeddings = [one_hot_encode(self.w2id[word], len(self.vocab)).dot(self.input_weights) for word in word_list]
         fig, ax = plt.subplots()
@@ -227,20 +240,20 @@ class SkipGram:
 
         for i, letter in enumerate(word_list):
             ax.annotate(letter, (word_embeddings[i][0][0], word_embeddings[i][0][1]), size=20 if letter in ['felix', 'micha'] else 10)
+        plt.title('Word embeddings')
         plt.show()
 
 
 if __name__ == '__main__':
     if not linux:
-
-        sentences = [('a b c d e f g h i j k l m n o p q r s t u v w x y z ' * 10).split(' ')] * 100
-        sentences = text2sentences(path)[:100]
-
-        sg_model = SkipGram(sentences, minCount=5, negativeRate=5, nEmbed=50, learning_rate=0.1)
+        sentences = text2sentences(path)
+        random.shuffle(sentences)
+        sg_model = SkipGram(sentences, minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
         sg_model.train()
-        sg_model.save('test_save.json')
-        load_sg = SkipGram.load('test_save.json')
-        print(load_sg.similarity('the', 'u.s.'))
+        sg_model.save('test_save_whole.json')
+        load_sg = SkipGram.load('test_save_whole.json')
+        print(load_sg.similarity('a', 'b'))
+
 
     elif linux:
         parser = argparse.ArgumentParser()
