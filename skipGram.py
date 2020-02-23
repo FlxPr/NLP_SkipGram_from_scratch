@@ -18,16 +18,15 @@ from spacy.lang.en import English  # it is going to be used in the text2sentence
 
 path = 'data/training/news.en-00001-of-00100'  # First data file for coding and easy debugging
 linux = False
-nlp = English()
+nlp = spacy.load("en_core_web_sm")
 
 
 def transform_tokens(spacy_tokens):
     string_tokens = [token.orth_ for token in spacy_tokens if
                      not token.is_punct]  # remove punctuations and remove strings
-    string_tokens = [token for token in string_tokens if not nlp.vocab[token].is_stop]  # Remove stopwords
     string_tokens = [token for token in string_tokens if not len(token) < 3 and not token.isdigit()]
     full_string = nlp(" ".join(string_tokens))  # Bring it to spacy format again for lemmatisation
-    lemmatised = list([token.lemma_ for token in full_string])  # Lemmatization  - it is not good lemmatisation
+    lemmatised = [token.lemma_ for token in full_string]
     return lemmatised
 
 
@@ -72,6 +71,7 @@ class SkipGram:
         self.id2frequency = id2frequency
         self.cached_samples = []
         self.accLoss = 0
+        self.mean_word = None
 
     def create_vocabulary(self):
         # Get the preprocessed sentences as a single list
@@ -164,6 +164,7 @@ class SkipGram:
                 # self.trainWords = 0
                 # self.accLoss = 0.
 
+        self.mean_word = np.array([np.mean(self.input_weights[:, i]) for i in range(self.nEmbed)])
 
     def trainWord(self, wordId, contextId, negativeIds):
         word_embedding = self.input_weights[wordId, :]
@@ -212,16 +213,15 @@ class SkipGram:
         if word1 in self.vocab:
             word1_embed = self.input_weights[self.w2id[word1], :]
         else:  # Unknown word mapped to average of all the words
-            word1_embed = np.mean(self.input_weights, axis=1)
+            word1_embed = self.mean_word
 
         if word2 in self.vocab:
             word2_embed = self.input_weights[self.w2id[word2], :]
         else:
-            word2_embed = self.input_weights[self.w2id[word2], :]
+            word2_embed = self.mean_word
 
         cosine_similarity = word1_embed.dot(word2_embed.T)/(np.linalg.norm(word1_embed) * np.linalg.norm(word2_embed))
         return cosine_similarity.item()
-
 
     @staticmethod
     def load(path):
@@ -234,23 +234,22 @@ class SkipGram:
                         id2frequency=params['id2frequency'])
 
 
-
 if __name__ == '__main__':
     if not linux:
         sentences = text2sentences(path)
         random.shuffle(sentences)
-        sg_model = SkipGram(sentences, minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
+        sg_model = SkipGram(sentences[:1001], minCount=10, negativeRate=5, nEmbed=100, learning_rate=0.05)
         sg_model.train()
         sg_model.save('test.json')
 
         load_sg = SkipGram.load('test.json')
-        word1 = 'shoe'
-        k = sorted([(load_sg.similarity(word1, word), word) for word in list(load_sg.vocab.keys())], reverse=True)
-        print("Most similar words to '{}' :".format(word1))
+        word0 = 'kill'
+        k = sorted([(load_sg.similarity(word0, word), word) for word in list(load_sg.vocab.keys())], reverse=True)
+        print("Most similar words to '{}' :".format(word0))
         for word in k[:10]:
             print(word)
 
-        print("Least similar words to '{}' :".format(word1))
+        print("Least similar words to '{}' :".format(word0))
         for word in k[::-1][:10]:
             print(word)
 
@@ -265,8 +264,9 @@ if __name__ == '__main__':
         if not opts.test:
             sentences = text2sentences(opts.text)
             random.shuffle(sentences)
-            sg = SkipGram(sentences)
+            sg = SkipGram(sentences[:100000])
             sg.train()
+            #
             sg.save(opts.model)
 
         else:
