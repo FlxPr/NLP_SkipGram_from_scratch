@@ -3,7 +3,6 @@ import argparse
 import pandas as pd
 from collections import Counter
 from itertools import chain
-import matplotlib.pyplot as plt
 import json
 import time
 import matplotlib.pyplot as plt
@@ -55,7 +54,6 @@ def load_pairs(path):
 class SkipGram:
     def __init__(self, trainset, nEmbed=100, negativeRate=5, winSize=5, minCount=5, learning_rate=0.1,
                  input_weights=None, output_weights=None, w2id=None, vocab=None, id2frequency=None) :
-        self.loss = []
         self.trainset = trainset
         self.minCount = minCount  # Minimum word frequency to enter the dictionary
         self.winSize = winSize  # Window size for defining context
@@ -162,33 +160,30 @@ class SkipGram:
             if counter > 0 and counter % 1000 == 0:
                 print(' > training %d of %d' % (counter, len(self.trainset)))
                 print('elapsed time training {} seconds'.format(int(time.time() - tic)))
-                self.loss.append(self.accLoss / self.trainWords)
-                self.trainWords = 0
-                self.accLoss = 0.
+                # self.loss.append(self.accLoss / self.trainWords)
+                # self.trainWords = 0
+                # self.accLoss = 0.
 
 
     def trainWord(self, wordId, contextId, negativeIds):
         word_embedding = self.input_weights[wordId, :]
-        input_matrix_gradient = (sigmoid(word_embedding.dot(self.output_weights[:, contextId].reshape(self.nEmbed, 1))) - 1) * \
+        input_matrix_gradient = (sigmoid(
+            word_embedding.dot(self.output_weights[:, contextId].reshape(self.nEmbed, 1))) - 1) * \
                                 self.output_weights[:, contextId]
 
-        positive_loss = sigmoid(word_embedding.dot(self.output_weights[:, contextId])) - 1
-        negative_total_loss = 0
-        output_matrix_gradient_positive_example = positive_loss * word_embedding
+        output_matrix_gradient_positive_example = (sigmoid(word_embedding.dot(self.output_weights[:, contextId])) - 1) * word_embedding
         output_matrix_gradient_negative_examples = []
         for negative_id in negativeIds:
-            negative_loss = sigmoid(word_embedding.dot(self.output_weights[:, negative_id]))
-            negative_total_loss += negative_loss
-            output_matrix_gradient_negative_examples.append(negative_loss * word_embedding)
+            output_matrix_gradient_negative_examples.append(
+                sigmoid(word_embedding.dot(self.output_weights[:, negative_id])) * word_embedding)
             input_matrix_gradient += sigmoid(word_embedding.dot(self.output_weights[:, negative_id])) * \
                                      self.output_weights[:, negative_id]
-        self.accLoss += (positive_loss + negative_total_loss)/(len(negativeIds) + 1)
-
 
         self.input_weights[wordId, :] -= self.learning_rate * input_matrix_gradient.flatten()
         self.output_weights[:, contextId] -= self.learning_rate * output_matrix_gradient_positive_example.flatten()
         for negative_id, gradient in zip(negativeIds, output_matrix_gradient_negative_examples):
             self.output_weights[:, negative_id] -= self.learning_rate * gradient.flatten()
+        # Loss computation removed for performance improvement
 
     def save(self, path):
         parameters = {
@@ -227,12 +222,6 @@ class SkipGram:
         cosine_similarity = word1_embed.dot(word2_embed.T)/(np.linalg.norm(word1_embed) * np.linalg.norm(word2_embed))
         return cosine_similarity.item()
 
-    def plot_loss(self):
-        plt.plot([1000 * i for i in range(len(self.loss))], self.loss)
-        plt.title('Evolution of training loss')
-        plt.xlabel('Words trained')
-        plt.show()
-
 
     @staticmethod
     def load(path):
@@ -248,11 +237,10 @@ class SkipGram:
 
 if __name__ == '__main__':
     if not linux:
-        #sentences = text2sentences(path)
-        #random.shuffle(sentences)
-        sg_model = SkipGram(sentences[:20000], minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
+        sentences = text2sentences(path)
+        random.shuffle(sentences)
+        sg_model = SkipGram(sentences, minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
         sg_model.train()
-        sg_model.plot_loss()
         sg_model.save('test.json')
 
         load_sg = SkipGram.load('test.json')
