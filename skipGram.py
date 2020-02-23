@@ -12,29 +12,34 @@ import numpy as np
 import random
 from scipy.special import expit
 from sklearn.preprocessing import normalize
+import spacy
+from spacy.lang.en import English  # it is going to be used in the text2sentence function
 
 
 path = 'data/training/news.en-00001-of-00100'  # First data file for coding and easy debugging
 linux = False
 
 
-def sigmoid(x):
-     return 1/(1 + np.exp(-x))
-
-
 def text2sentences(path):
-    # TODO: remove stop words ?
-    # No need to take care of rare words like bqb4645 which will not be in dictionary due to minimum word count
+    nlp = English()
     sentences = []
     with open(path, encoding="utf8") as file:
         for sentence in file:
-            preprocessed_sentence = sentence.lower().split()
+            raw_string = sentence.strip()  # Remove spaces in the beginning and in the end
+            string = raw_string.lower()  # Write code for lower-casing
+            spacy_tokens = nlp(string)  # Write code to tokenize
+            string_tokens = [token.orth_ for token in spacy_tokens if
+                             not token.is_punct]  # remove punctuations and remove strings
+            string_tokens = [token for token in string_tokens if not nlp.vocab[token].is_stop]  # Remove stopwords
+            full_string = nlp(" ".join(string_tokens))  # Bring it to spacy format again for lemmatisation
+            lemmatised = list([token.lemma_ for token in full_string])  # Lemmatization  - it is not good lemmatisation
+            sentences.append(lemmatised)
 
-            # Gets rid of small words and punctuation (length<2) and numbers like dates that may show up frequently
-            preprocessed_sentence = list(filter(lambda x: not x.isdigit() and len(x) > 2, preprocessed_sentence))
-
-            sentences.append(preprocessed_sentence)
     return sentences
+
+
+def sigmoid(x):
+     return 1/(1 + np.exp(-x))
 
 
 def load_pairs(path):
@@ -153,9 +158,9 @@ class SkipGram:
             if counter % 100 == 0:
                 print(' > training %d of %d' % (counter, len(self.trainset)))
                 print('elapsed time training {} seconds'.format(int(time.time() - tic)))
-                # self.loss.append(self.accLoss / self.trainWords)
-                # self.trainWords = 0
-                # self.accLoss = 0.
+                self.loss.append(self.accLoss / self.trainWords)
+                self.trainWords = 0
+                self.accLoss = 0.
 
     def trainWord(self, wordId, contextId, negativeIds):
         word_embedding = self.input_weights[wordId, :]
@@ -196,9 +201,9 @@ class SkipGram:
             word1_embed = np.mean(self.input_weights, axis=1)
 
         if word2 in self.vocab:
-            word2_embed = self.input_weights[self.w2id[word1], :]
+            word2_embed = self.input_weights[self.w2id[word2], :]
         else:
-            word2_embed = self.input_weights[self.w2id[word1], :]
+            word2_embed = self.input_weights[self.w2id[word2], :]
 
         cosine_similarity = word1_embed.dot(word2_embed.T)/(np.linalg.norm(word1_embed) * np.linalg.norm(word2_embed))
         return cosine_similarity.item()
@@ -217,11 +222,11 @@ class SkipGram:
 
 if __name__ == '__main__':
     if not linux:
-        sentences = text2sentences(path)
-        random.shuffle(sentences)
-        sg_model = SkipGram(sentences[:10000], minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
-        sg_model.train()
-        sg_model.save('test_save_whole_lr_015.json')
+        #sentences = text2sentences(path)
+        #random.shuffle(sentences)
+        #sg_model = SkipGram(sentences[:10000], minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
+        #sg_model.train()
+        #sg_model.save('test_save_whole_lr_015.json')
 
         load_sg = SkipGram.load('test_save_whole.json')
         word1 = 'hand'
