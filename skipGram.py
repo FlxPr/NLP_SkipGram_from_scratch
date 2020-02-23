@@ -51,7 +51,7 @@ def load_pairs(path):
 class SkipGram:
     def __init__(self, sentences, nEmbed=100, negativeRate=5, winSize=5, minCount=5, learning_rate=0.1,
                  input_weights=None, output_weights=None, w2id=None, vocab=None, id2frequency=None) :
-        self.loss = None
+        self.loss = []
         self.minCount = minCount  # Minimum word frequency to enter the dictionary
         self.winSize = winSize  # Window size for defining context
         self.negativeRate = negativeRate  # Number of negative samples to provide for each context word
@@ -105,8 +105,6 @@ class SkipGram:
         return negative_samples
 
     def train(self):
-        tic = time.time()
-
         print('Initializing SkipGram model')
         self.trainset = sentences
 
@@ -160,7 +158,7 @@ class SkipGram:
                 print('elapsed time training {} seconds'.format(int(time.time() - tic)))
                 self.loss.append(self.accLoss / self.trainWords)
                 self.trainWords = 0
-                self.accLoss = 0.
+
 
     def trainWord(self, wordId, contextId, negativeIds):
         word_embedding = self.input_weights[wordId, :]
@@ -174,6 +172,7 @@ class SkipGram:
             input_matrix_gradient += sigmoid(word_embedding.dot(self.output_weights[:, negative_id])) * \
                                      self.output_weights[:, negative_id]
 
+        
         self.input_weights[wordId, :] -= self.learning_rate * input_matrix_gradient.flatten()
         self.output_weights[:, contextId] -= self.learning_rate * output_matrix_gradient_positive_example.flatten()
         for negative_id, gradient in zip(negativeIds, output_matrix_gradient_negative_examples):
