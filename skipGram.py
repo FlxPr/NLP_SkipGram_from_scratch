@@ -6,6 +6,7 @@ from itertools import chain
 import matplotlib.pyplot as plt
 import json
 import time
+import matplotlib.pyplot as plt
 
 # useful stuff
 import numpy as np
@@ -18,23 +19,26 @@ from spacy.lang.en import English  # it is going to be used in the text2sentence
 
 path = 'data/training/news.en-00001-of-00100'  # First data file for coding and easy debugging
 linux = False
+nlp = English()
+
+
+def transform_tokens(spacy_tokens):
+    string_tokens = [token.orth_ for token in spacy_tokens if
+                     not token.is_punct]  # remove punctuations and remove strings
+    string_tokens = [token for token in string_tokens if not nlp.vocab[token].is_stop]  # Remove stopwords
+    string_tokens = [token for token in string_tokens if not len(token) < 3 and not token.isdigit()]
+    full_string = nlp(" ".join(string_tokens))  # Bring it to spacy format again for lemmatisation
+    lemmatised = list([token.lemma_ for token in full_string])  # Lemmatization  - it is not good lemmatisation
+    return lemmatised
 
 
 def text2sentences(path):
-    nlp = English()
     sentences = []
     with open(path, encoding="utf8") as file:
         for sentence in file:
-            raw_string = sentence.strip()  # Remove spaces in the beginning and in the end
-            string = raw_string.lower()  # Write code for lower-casing
-            spacy_tokens = nlp(string)  # Write code to tokenize
-            string_tokens = [token.orth_ for token in spacy_tokens if
-                             not token.is_punct]  # remove punctuations and remove strings
-            string_tokens = [token for token in string_tokens if not nlp.vocab[token].is_stop]  # Remove stopwords
-            full_string = nlp(" ".join(string_tokens))  # Bring it to spacy format again for lemmatisation
-            lemmatised = list([token.lemma_ for token in full_string])  # Lemmatization  - it is not good lemmatisation
-            sentences.append(lemmatised)
-
+            words = sentence.lower().strip()  # Remove spaces in the beginning and in the end
+            spacy_tokens = nlp(words)  # Write code to tokenize
+            sentences.append(transform_tokens(spacy_tokens))
     return sentences
 
 
@@ -49,9 +53,10 @@ def load_pairs(path):
 
 
 class SkipGram:
-    def __init__(self, sentences, nEmbed=100, negativeRate=5, winSize=5, minCount=5, learning_rate=0.1,
+    def __init__(self, trainset, nEmbed=100, negativeRate=5, winSize=5, minCount=5, learning_rate=0.1,
                  input_weights=None, output_weights=None, w2id=None, vocab=None, id2frequency=None) :
         self.loss = []
+        self.trainset = trainset
         self.minCount = minCount  # Minimum word frequency to enter the dictionary
         self.winSize = winSize  # Window size for defining context
         self.negativeRate = negativeRate  # Number of negative samples to provide for each context word
@@ -68,6 +73,7 @@ class SkipGram:
         self.output_weights = output_weights
         self.id2frequency = id2frequency
         self.cached_samples = []
+        self.accLoss = 0
 
     def create_vocabulary(self):
         # Get the preprocessed sentences as a single list
@@ -106,8 +112,6 @@ class SkipGram:
 
     def train(self):
         print('Initializing SkipGram model')
-        self.trainset = sentences
-
         print('Creating vocabulary...')
         self.vocab = self.create_vocabulary()  # list of valid words
         if len(list(self.vocab)) == 0:
@@ -128,6 +132,8 @@ class SkipGram:
         print('Initializing weights')
         self.input_weights = np.random.randn(len(self.vocab), self.nEmbed) * np.sqrt(2 / len(self.vocab))
         self.output_weights = np.random.randn(self.nEmbed, len(self.vocab)) * np.sqrt(2 / self.nEmbed)
+
+        tic = time.time()
 
         for counter, sentence in enumerate(self.trainset):
             sentence = list(filter(lambda word: word in self.vocab, sentence))
@@ -153,11 +159,12 @@ class SkipGram:
                     self.trainWord(wIdx, ctxtId, negativeIds)
                     self.trainWords += 1
 
-            if counter % 100 == 0:
+            if counter > 0 and counter % 1000 == 0:
                 print(' > training %d of %d' % (counter, len(self.trainset)))
                 print('elapsed time training {} seconds'.format(int(time.time() - tic)))
                 self.loss.append(self.accLoss / self.trainWords)
                 self.trainWords = 0
+                self.accLoss = 0.
 
 
     def trainWord(self, wordId, contextId, negativeIds):
@@ -165,14 +172,19 @@ class SkipGram:
         input_matrix_gradient = (sigmoid(word_embedding.dot(self.output_weights[:, contextId].reshape(self.nEmbed, 1))) - 1) * \
                                 self.output_weights[:, contextId]
 
-        output_matrix_gradient_positive_example = (sigmoid(word_embedding.dot(self.output_weights[:, contextId])) - 1) * word_embedding
+        positive_loss = sigmoid(word_embedding.dot(self.output_weights[:, contextId])) - 1
+        negative_total_loss = 0
+        output_matrix_gradient_positive_example = positive_loss * word_embedding
         output_matrix_gradient_negative_examples = []
         for negative_id in negativeIds:
-            output_matrix_gradient_negative_examples.append(sigmoid(word_embedding.dot(self.output_weights[:, negative_id])) * word_embedding)
+            negative_loss = sigmoid(word_embedding.dot(self.output_weights[:, negative_id]))
+            negative_total_loss += negative_loss
+            output_matrix_gradient_negative_examples.append(negative_loss * word_embedding)
             input_matrix_gradient += sigmoid(word_embedding.dot(self.output_weights[:, negative_id])) * \
                                      self.output_weights[:, negative_id]
+        self.accLoss += (positive_loss + negative_total_loss)/(len(negativeIds) + 1)
 
-        
+
         self.input_weights[wordId, :] -= self.learning_rate * input_matrix_gradient.flatten()
         self.output_weights[:, contextId] -= self.learning_rate * output_matrix_gradient_positive_example.flatten()
         for negative_id, gradient in zip(negativeIds, output_matrix_gradient_negative_examples):
@@ -190,13 +202,21 @@ class SkipGram:
         json.dump(parameters, open(path, 'wt'))
 
     def similarity(self, word1, word2):
+        word1, word2 = word1.lower(), word2.lower()
+        spacy_tokens = nlp(' '.join([word1, word2]))
+        words = transform_tokens(spacy_tokens)
+
+        if len(words) < 2:
+            return 0
+
+        word1, word2 = words
 
         if word1 not in self.vocab and word2 not in self.vocab:
             return 0
 
-        if word1 in self.vocab: # Unknown word mapped to average of all the words
+        if word1 in self.vocab:
             word1_embed = self.input_weights[self.w2id[word1], :]
-        else:
+        else:  # Unknown word mapped to average of all the words
             word1_embed = np.mean(self.input_weights, axis=1)
 
         if word2 in self.vocab:
@@ -207,11 +227,17 @@ class SkipGram:
         cosine_similarity = word1_embed.dot(word2_embed.T)/(np.linalg.norm(word1_embed) * np.linalg.norm(word2_embed))
         return cosine_similarity.item()
 
+    def plot_loss(self):
+        plt.plot([1000 * i for i in range(len(self.loss))], self.loss)
+        plt.title('Evolution of training loss')
+        plt.xlabel('Words trained')
+        plt.show()
+
 
     @staticmethod
     def load(path):
         params = json.load(open(path))
-        return SkipGram(sentences=[],
+        return SkipGram(trainset=[],
                         input_weights=np.array(params['input_weights']),
                         output_weights=np.array(params['output_weights']),
                         vocab=params['vocab'],
@@ -219,16 +245,18 @@ class SkipGram:
                         id2frequency=params['id2frequency'])
 
 
+
 if __name__ == '__main__':
     if not linux:
         #sentences = text2sentences(path)
         #random.shuffle(sentences)
-        #sg_model = SkipGram(sentences[:10000], minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
-        #sg_model.train()
-        #sg_model.save('test_save_whole_lr_015.json')
+        sg_model = SkipGram(sentences[:20000], minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
+        sg_model.train()
+        sg_model.plot_loss()
+        sg_model.save('test.json')
 
-        load_sg = SkipGram.load('test_save_whole.json')
-        word1 = 'hand'
+        load_sg = SkipGram.load('test.json')
+        word1 = 'shoe'
         k = sorted([(load_sg.similarity(word1, word), word) for word in list(load_sg.vocab.keys())], reverse=True)
         print("Most similar words to '{}' :".format(word1))
         for word in k[:10]:
