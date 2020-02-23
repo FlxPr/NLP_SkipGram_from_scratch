@@ -5,7 +5,6 @@ from collections import Counter
 from itertools import chain
 import json
 import time
-import matplotlib.pyplot as plt
 
 # useful stuff
 import numpy as np
@@ -18,13 +17,14 @@ from spacy.lang.en import English  # it is going to be used in the text2sentence
 
 path = 'data/training/news.en-00001-of-00100'  # First data file for coding and easy debugging
 linux = False
-nlp = spacy.load("en_core_web_sm")
+nlp = English()
 
 
 def transform_tokens(spacy_tokens):
     string_tokens = [token.orth_ for token in spacy_tokens if
-                     not token.is_punct]  # remove punctuations and remove strings
-    string_tokens = [token for token in string_tokens if not len(token) < 3 and not token.isdigit()]
+                     not token.is_punct]  # remove punctuations
+
+    string_tokens = [token for token in string_tokens if not token.isdigit()]
     full_string = nlp(" ".join(string_tokens))  # Bring it to spacy format again for lemmatisation
     lemmatised = [token.lemma_ for token in full_string]
     return lemmatised
@@ -51,27 +51,30 @@ def load_pairs(path):
 
 
 class SkipGram:
-    def __init__(self, trainset, nEmbed=100, negativeRate=5, winSize=5, minCount=5, learning_rate=0.1,
-                 input_weights=None, output_weights=None, w2id=None, vocab=None, id2frequency=None) :
+    def __init__(self, trainset, nEmbed=100, negativeRate=5, winSize=5, minCount=10, learning_rate=0.01,
+                 input_weights=None, output_weights=None, w2id=None, vocab=None, id2frequency=None, mean_word=None):
         self.trainset = trainset
         self.minCount = minCount  # Minimum word frequency to enter the dictionary
         self.winSize = winSize  # Window size for defining context
         self.negativeRate = negativeRate  # Number of negative samples to provide for each context word
         self.learning_rate = learning_rate
-        self.trainWords = 0
         self.nEmbed = nEmbed
+
         self.id2frequency = id2frequency
         self.w2id = w2id
         self.vocab = vocab
         self.frequency_list = []
         self.sum_of_frequencies = 0
         self.id_list = 0
+        self.trainWords = 0
+
         self.input_weights = input_weights
         self.output_weights = output_weights
-        self.id2frequency = id2frequency
+
         self.cached_samples = []
         self.accLoss = 0
-        self.mean_word = None
+
+        self.mean_word = mean_word
 
     def create_vocabulary(self):
         # Get the preprocessed sentences as a single list
@@ -94,7 +97,6 @@ class SkipGram:
                                         size=size,
                                         p=self.frequency_list))
         self.cached_samples.extend(samples)
-
 
     def sample(self, omit):
         negative_samples = []
@@ -163,8 +165,9 @@ class SkipGram:
                 # self.loss.append(self.accLoss / self.trainWords)
                 # self.trainWords = 0
                 # self.accLoss = 0.
-
+        print('SETTING MEAN WORD')
         self.mean_word = np.array([np.mean(self.input_weights[:, i]) for i in range(self.nEmbed)])
+        print(self.mean_word)
 
     def trainWord(self, wordId, contextId, negativeIds):
         word_embedding = self.input_weights[wordId, :]
@@ -192,7 +195,8 @@ class SkipGram:
             "output_weights": self.output_weights.tolist(),
             "vocab": self.vocab,
             "w2id": self.w2id,
-            "id2frequency": self.id2frequency
+            "id2frequency": self.id2frequency,
+            'mean_word': self.mean_word.tolist()
         }
 
         json.dump(parameters, open(path, 'wt'))
@@ -231,19 +235,22 @@ class SkipGram:
                         output_weights=np.array(params['output_weights']),
                         vocab=params['vocab'],
                         w2id=params['w2id'],
-                        id2frequency=params['id2frequency'])
+                        id2frequency=params['id2frequency'],
+                        mean_word=np.array(params['mean_word']))
 
 
 if __name__ == '__main__':
     if not linux:
-        sentences = text2sentences(path)
-        random.shuffle(sentences)
-        sg_model = SkipGram(sentences[:1001], minCount=10, negativeRate=5, nEmbed=100, learning_rate=0.05)
-        sg_model.train()
-        sg_model.save('test.json')
+        # sentences = text2sentences(path)
+        # random.shuffle(sentences)
 
-        load_sg = SkipGram.load('test.json')
-        word0 = 'kill'
+        sentences = ['a b c d e f g h i j'.split()] * 1000
+        sg_model = SkipGram(sentences, minCount=10, negativeRate=5, nEmbed=5, learning_rate=0.05)
+        sg_model.train()
+        sg_model.save('test2.json')
+
+        load_sg = SkipGram.load('test2.json')
+        word0 = 'a'
         k = sorted([(load_sg.similarity(word0, word), word) for word in list(load_sg.vocab.keys())], reverse=True)
         print("Most similar words to '{}' :".format(word0))
         for word in k[:10]:
@@ -264,9 +271,8 @@ if __name__ == '__main__':
         if not opts.test:
             sentences = text2sentences(opts.text)
             random.shuffle(sentences)
-            sg = SkipGram(sentences[:100000])
+            sg = SkipGram(sentences)
             sg.train()
-            #
             sg.save(opts.model)
 
         else:
@@ -274,5 +280,4 @@ if __name__ == '__main__':
 
             sg = SkipGram.load(opts.model)
             for a, b, _ in pairs:
-                # make sure this does not raise any exception, even if a or b are not in sg.vocab
                 print(sg.similarity(a, b))
