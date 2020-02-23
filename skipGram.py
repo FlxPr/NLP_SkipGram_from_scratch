@@ -18,17 +18,13 @@ path = 'data/training/news.en-00001-of-00100'  # First data file for coding and 
 linux = False
 
 
-def one_hot_encode(word_id, dimension):
-    return np.array([[0] * word_id + [1] + [0] * (dimension - (word_id + 1))])
-
-
 def sigmoid(x):
      return 1/(1 + np.exp(-x))
 
 
 def text2sentences(path):
     # TODO: remove stop words ?
-    # No need to take care of rare weird words like bqb4645 which will not be in dictionary due to minimum word count
+    # No need to take care of rare words like bqb4645 which will not be in dictionary due to minimum word count
     sentences = []
     with open(path, encoding="utf8") as file:
         for sentence in file:
@@ -92,10 +88,6 @@ class SkipGram:
 
 
     def sample(self, omit):
-        global time_sampling
-        global time_check_any_sampling
-
-        tic = time.time()
         negative_samples = []
         while len(negative_samples) < self.negativeRate:
             if len(self.cached_samples) == 0:
@@ -105,13 +97,9 @@ class SkipGram:
             if negative_sample not in omit:
                 negative_samples.append(negative_sample)
 
-        toc = time.time()
-        time_sampling += toc - tic
-
         return negative_samples
 
     def train(self):
-        global time_training
         tic = time.time()
 
         print('Initializing SkipGram model')
@@ -164,11 +152,10 @@ class SkipGram:
 
             if counter % 100 == 0:
                 print(' > training %d of %d' % (counter, len(self.trainset)))
-                print('elapsed time training {} seconds, sampling {} seconds'.format(int(time.time() - tic), time_sampling))
+                print('elapsed time training {} seconds'.format(int(time.time() - tic)))
                 # self.loss.append(self.accLoss / self.trainWords)
                 # self.trainWords = 0
                 # self.accLoss = 0.
-        self.plot_embedding()
 
     def trainWord(self, wordId, contextId, negativeIds):
         word_embedding = self.input_weights[wordId, :]
@@ -187,7 +174,6 @@ class SkipGram:
         for negative_id, gradient in zip(negativeIds, output_matrix_gradient_negative_examples):
             self.output_weights[:, negative_id] -= self.learning_rate * gradient.flatten()
 
-
     def save(self, path):
         parameters = {
             "input_weights": self.input_weights.tolist(),
@@ -197,63 +183,56 @@ class SkipGram:
             "id2frequency": self.id2frequency
         }
 
-        print(str(parameters))
         json.dump(parameters, open(path, 'wt'))
 
-
     def similarity(self, word1, word2):
-        """
-            computes similiarity between the two words. unknown words are mapped to one common vector
-        :param word1:
-        :param word2:
-        :return: a float \in [0,1] indicating the similarity (the higher the more similar)
-        """
 
-        if word1 in self.vocab and word2 in self.vocab:
-            word1_embed = one_hot_encode(word1, len(self.vocab)).dot(self.input_weights)
-            word2_embed = one_hot_encode(word2, len(self.vocab)).dot(self.input_weights)
-            similarity = word1_embed.dot(word2_embed.T)/(np.linalg.norm(word1_embed) * np.linalg.norm(word2_embed)).item()
-            return similarity.item()
+        if word1 not in self.vocab and word2 not in self.vocab:
+            return 0
 
-        return 0  # TODO take care of unknown words (make average of words in corpus ?)
+        if word1 in self.vocab: # Unknown word mapped to average of all the words
+            word1_embed = self.input_weights[self.w2id[word1], :]
+        else:
+            word1_embed = np.mean(self.input_weights, axis=1)
+
+        if word2 in self.vocab:
+            word2_embed = self.input_weights[self.w2id[word1], :]
+        else:
+            word2_embed = self.input_weights[self.w2id[word1], :]
+
+        cosine_similarity = word1_embed.dot(word2_embed.T)/(np.linalg.norm(word1_embed) * np.linalg.norm(word2_embed))
+        return cosine_similarity.item()
 
 
     @staticmethod
     def load(path):
         params = json.load(open(path))
         return SkipGram(sentences=[],
-                        input_weights=params['input_weights'],
-                        output_weights=params['output_weights'],
+                        input_weights=np.array(params['input_weights']),
+                        output_weights=np.array(params['output_weights']),
                         vocab=params['vocab'],
                         w2id=params['w2id'],
                         id2frequency=params['id2frequency'])
-
-    def plot_embedding(self):
-        if self.nEmbed != 2:
-            return
-        word_list = list(self.vocab.keys())
-        print(word_list)
-
-        word_embeddings = [one_hot_encode(self.w2id[word], len(self.vocab)).dot(self.input_weights) for word in word_list]
-        fig, ax = plt.subplots()
-        ax.scatter([word_embeddings[i][0][0] for i in range(len(word_list))], [word_embeddings[i][0][1] for i in range(len(word_list))])
-
-        for i, letter in enumerate(word_list):
-            ax.annotate(letter, (word_embeddings[i][0][0], word_embeddings[i][0][1]), size=20 if letter in ['felix', 'micha'] else 10)
-        plt.title('Word embeddings')
-        plt.show()
 
 
 if __name__ == '__main__':
     if not linux:
         sentences = text2sentences(path)
         random.shuffle(sentences)
-        sg_model = SkipGram(sentences, minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
+        sg_model = SkipGram(sentences[:10000], minCount=5, negativeRate=5, nEmbed=100, learning_rate=0.05)
         sg_model.train()
-        sg_model.save('test_save_whole.json')
-        load_sg = SkipGram.load('test_save_whole.json')
-        print(load_sg.similarity('a', 'b'))
+        sg_model.save('test_save_whole_lr_015.json')
 
+        load_sg = SkipGram.load('test_save_whole.json')
+        word1 = 'hand'
+        k = sorted([(load_sg.similarity(word1, word), word) for word in list(load_sg.vocab.keys())], reverse=True)
+        print("Most similar words to '{}' :".format(word1))
+        for word in k[:10]:
+            print(word)
+
+        print("Least similar words to '{}' :".format(word1))
+        for word in k[::-1][:10]:
+            print(word)
 
     elif linux:
         parser = argparse.ArgumentParser()
@@ -277,4 +256,3 @@ if __name__ == '__main__':
             for a, b, _ in pairs:
                 # make sure this does not raise any exception, even if a or b are not in sg.vocab
                 print(sg.similarity(a, b))
-
