@@ -16,7 +16,7 @@ from spacy.lang.en import English  # it is going to be used in the text2sentence
 
 
 path = 'data/training/news.en-00001-of-00100'  # First data file for coding and easy debugging
-linux = False
+linux = True
 nlp = English()
 
 
